@@ -49,7 +49,8 @@ export default async function handler(req, res) {
     }
 
     const NEWS_API_KEY = process.env.NEWS_API_KEY;
-    const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
+    const API_KEY = process.env.ANTHROPIC_API_KEY || process.env.OPENAI_API_KEY;
+    const BASE_URL = process.env.API_BASE_URL || 'https://api.openai.com/v1'; // 中轉 API 地址
 
     if (!NEWS_API_KEY) {
       throw new Error('未設定 NEWS_API_KEY');
@@ -83,11 +84,11 @@ export default async function handler(req, res) {
       });
     }
 
-    // 3. 只在有 ANTHROPIC_API_KEY 時才使用 AI 翻譯
+    // 3. 使用中轉 API 進行 AI 處理
     let processedNews;
     
-    if (ANTHROPIC_API_KEY) {
-      // 批次處理：一次性發送所有新聞給 Claude（省 tokens）
+    if (API_KEY) {
+      // 批次處理：一次性發送所有新聞（省 tokens）
       const batchPrompt = articles.slice(0, 3).map((article, i) => 
         `新聞 ${i + 1}:
 標題: ${article.title}
@@ -98,19 +99,23 @@ export default async function handler(req, res) {
       try {
         dailyRequestCount++; // 增加請求計數
         
-        const claudeResponse = await fetch('https://api.anthropic.com/v1/messages', {
+        // 使用 OpenAI 兼容格式的中轉 API
+        const aiResponse = await fetch(`${BASE_URL}/chat/completions`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'x-api-key': ANTHROPIC_API_KEY,
-            'anthropic-version': '2023-06-01'
+            'Authorization': `Bearer ${API_KEY}`
           },
           body: JSON.stringify({
-            model: 'claude-sonnet-4-20250514',
-            max_tokens: 2000,
-            messages: [{
-              role: 'user',
-              content: `請將以下 ${articles.slice(0, 3).length} 則英文財經新聞翻譯成繁體中文，並為每則新聞提供 AI 投資解讀。請以 JSON 陣列格式回應，不要包含 markdown 標記：
+            model: 'gpt-4o-mini', // 或者使用用戶指定的中轉模型，如 'claude-3-5-sonnet-20240620'
+            messages: [
+              {
+                role: 'system',
+                content: '你是一個專業的財經翻譯和分析助手。請將新聞翻譯成繁體中文，並提供投資解讀。'
+              },
+              {
+                role: 'user',
+                content: `請將以下 ${articles.slice(0, 3).length} 則英文財經新聞翻譯成繁體中文，並為每則新聞提供 AI 投資解讀。請以 JSON 陣列格式回應，不要包含 markdown 標記：
 
 ${batchPrompt}
 
@@ -123,17 +128,20 @@ ${batchPrompt}
     "category": "分類（貨幣政策/經濟數據/企業動態/地緣政治等）"
   }
 ]`
-            }]
+              }
+            ],
+            temperature: 0.7
           })
         });
 
-        if (!claudeResponse.ok) {
-          console.error('Claude API 錯誤:', await claudeResponse.text());
-          throw new Error('Claude API 請求失敗');
+        if (!aiResponse.ok) {
+          const errorText = await aiResponse.text();
+          console.error('AI API 錯誤:', errorText);
+          throw new Error(`AI API 請求失敗: ${aiResponse.status}`);
         }
 
-        const claudeData = await claudeResponse.json();
-        const responseText = claudeData.content[0].text;
+        const aiData = await aiResponse.json();
+        const responseText = aiData.choices[0].message.content;
         const cleanedText = responseText.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
         const parsedArray = JSON.parse(cleanedText);
 
@@ -202,7 +210,7 @@ function createFallbackNews(articles) {
     source: article.source.name,
     time: getRelativeTime(article.publishedAt),
     summary: article.description || '請點擊閱讀原文查看詳情',
-    aiInsight: '💡 提示：請設定 Claude API Key 以啟用 AI 繁中翻譯和深度解讀功能',
+    aiInsight: '💡 提示：請設定 API Key 以啟用 AI 繁中翻譯和深度解讀功能',
     category: '財經新聞',
     url: article.url,
     image: article.urlToImage,
@@ -218,10 +226,10 @@ function getDefaultNews() {
       title: "歡迎使用 AI 財經工具站",
       source: "系統訊息",
       time: "現在",
-      summary: "請設定 NewsAPI 和 Claude API 金鑰以獲取即時全球財經新聞和 AI 解讀。",
+      summary: "請設定 NewsAPI 和 AI API 金鑰以獲取即時全球財經新聞和 AI 解讀。",
       aiInsight: "💡 設定完成後，您將獲得每日更新的財經新聞及專業 AI 投資分析。",
       category: "系統訊息",
-      url: "https://console.anthropic.com"
+      url: "https://github.com"
     }
   ];
 }
