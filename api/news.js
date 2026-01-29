@@ -48,12 +48,20 @@ export default async function handler(req, res) {
       });
     }
 
+    // 獲取環境變量
     const NEWS_API_KEY = process.env.NEWS_API_KEY;
-    const API_KEY = process.env.ANTHROPIC_API_KEY || process.env.OPENAI_API_KEY;
-    const BASE_URL = process.env.API_BASE_URL || 'https://api.openai.com/v1'; // 中轉 API 地址
+    const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+    const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
+    const API_KEY = OPENAI_API_KEY || ANTHROPIC_API_KEY;
+    
+    // 處理 BASE_URL，確保結尾沒有多餘的斜槓
+    let BASE_URL = process.env.API_BASE_URL || 'https://api.openai.com/v1';
+    if (BASE_URL.endsWith('/')) {
+      BASE_URL = BASE_URL.slice(0, -1);
+    }
 
     if (!NEWS_API_KEY) {
-      throw new Error('未設定 NEWS_API_KEY');
+      throw new Error('未設定 NEWS_API_KEY 變量');
     }
 
     // 1. 從 NewsAPI 抓取新聞
@@ -62,14 +70,15 @@ export default async function handler(req, res) {
     );
     
     if (!newsResponse.ok) {
-      throw new Error('NewsAPI 請求失敗');
+      const errorText = await newsResponse.text();
+      throw new Error(`NewsAPI 請求失敗: ${newsResponse.status} ${errorText}`);
     }
 
     const newsData = await newsResponse.json();
     const articles = newsData.articles || [];
 
     if (articles.length === 0) {
-      throw new Error('沒有獲取到新聞');
+      throw new Error('NewsAPI 返回了空的新聞列表');
     }
 
     // 2. 檢查新聞是否與快取相同（避免重複翻譯）
@@ -88,7 +97,6 @@ export default async function handler(req, res) {
     let processedNews;
     
     if (API_KEY) {
-      // 批次處理：一次性發送所有新聞（省 tokens）
       const batchPrompt = articles.slice(0, 3).map((article, i) => 
         `新聞 ${i + 1}:
 標題: ${article.title}
@@ -97,17 +105,20 @@ export default async function handler(req, res) {
       ).join('\n\n---\n\n');
 
       try {
-        dailyRequestCount++; // 增加請求計數
+        dailyRequestCount++;
         
-        // 使用 OpenAI 兼容格式的中轉 API
-        const aiResponse = await fetch(`${BASE_URL}/chat/completions`, {
+        // 構建請求 URL
+        const apiUrl = `${BASE_URL}/chat/completions`;
+        console.log(`正在請求 AI API: ${apiUrl}`);
+
+        const aiResponse = await fetch(apiUrl, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${API_KEY}`
           },
           body: JSON.stringify({
-            model: 'gpt-4o-mini', // 或者使用用戶指定的中轉模型，如 'claude-3-5-sonnet-20240620'
+            model: process.env.AI_MODEL || 'gpt-4o-mini',
             messages: [
               {
                 role: 'system',
@@ -135,12 +146,17 @@ ${batchPrompt}
         });
 
         if (!aiResponse.ok) {
-          const errorText = await aiResponse.text();
-          console.error('AI API 錯誤:', errorText);
-          throw new Error(`AI API 請求失敗: ${aiResponse.status}`);
+          const errorDetail = await aiResponse.text();
+          console.error('AI API 錯誤詳情:', errorDetail);
+          throw new Error(`AI API 響應錯誤 (${aiResponse.status})`);
         }
 
         const aiData = await aiResponse.json();
+        
+        if (!aiData.choices || !aiData.choices[0] || !aiData.choices[0].message) {
+          throw new Error('AI API 返回格式不正確');
+        }
+
         const responseText = aiData.choices[0].message.content;
         const cleanedText = responseText.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
         const parsedArray = JSON.parse(cleanedText);
@@ -155,16 +171,17 @@ ${batchPrompt}
           category: parsed.category,
           url: articles[index].url,
           image: articles[index].urlToImage,
-          originalTitle: articles[index].title // 用於比對快取
+          originalTitle: articles[index].title
         }));
 
       } catch (error) {
-        console.error('AI 處理失敗，使用備用方案:', error);
-        processedNews = createFallbackNews(articles);
+        console.error('AI 處理失敗:', error);
+        // 在摘要中顯示具體錯誤，方便調試
+        processedNews = createFallbackNews(articles, `AI 處理出錯: ${error.message}`);
       }
     } else {
-      // 沒有 API Key，使用備用方案
-      processedNews = createFallbackNews(articles);
+      // 沒有 API Key
+      processedNews = createFallbackNews(articles, '未檢測到 API_KEY (OPENAI_API_KEY 或 ANTHROPIC_API_KEY)');
     }
 
     // 4. 更新快取
@@ -180,9 +197,7 @@ ${batchPrompt}
     });
 
   } catch (error) {
-    console.error('API 錯誤:', error);
-    
-    // 錯誤時返回快取或預設新聞
+    console.error('API 總體錯誤:', error);
     res.status(200).json({
       success: false,
       error: error.message,
@@ -193,24 +208,21 @@ ${batchPrompt}
   }
 }
 
-// 檢查新聞是否相同（比對標題）
 function articlesAreSame(newArticles, cachedNews) {
   if (!cachedNews || newArticles.length !== cachedNews.length) return false;
-  
   return newArticles.every((article, i) => 
     cachedNews[i] && article.title === cachedNews[i].originalTitle
   );
 }
 
-// 備用方案：不使用 AI 的簡單翻譯
-function createFallbackNews(articles) {
+function createFallbackNews(articles, errorMessage = '') {
   return articles.slice(0, 3).map((article, index) => ({
     id: index + 1,
-    title: article.title, // 保留英文標題
+    title: article.title,
     source: article.source.name,
     time: getRelativeTime(article.publishedAt),
     summary: article.description || '請點擊閱讀原文查看詳情',
-    aiInsight: '💡 提示：請設定 API Key 以啟用 AI 繁中翻譯和深度解讀功能',
+    aiInsight: `💡 ${errorMessage || '提示：請檢查 API Key 和 Base URL 設定'}`,
     category: '財經新聞',
     url: article.url,
     image: article.urlToImage,
@@ -218,7 +230,6 @@ function createFallbackNews(articles) {
   }));
 }
 
-// 預設新聞（當所有來源都失敗時）
 function getDefaultNews() {
   return [
     {
@@ -226,7 +237,7 @@ function getDefaultNews() {
       title: "歡迎使用 AI 財經工具站",
       source: "系統訊息",
       time: "現在",
-      summary: "請設定 NewsAPI 和 AI API 金鑰以獲取即時全球財經新聞和 AI 解讀。",
+      summary: "請檢查 Vercel 環境變量設定（NEWS_API_KEY, OPENAI_API_KEY, API_BASE_URL）。",
       aiInsight: "💡 設定完成後，您將獲得每日更新的財經新聞及專業 AI 投資分析。",
       category: "系統訊息",
       url: "https://github.com"
@@ -234,7 +245,6 @@ function getDefaultNews() {
   ];
 }
 
-// 計算相對時間
 function getRelativeTime(publishedAt) {
   const now = new Date();
   const published = new Date(publishedAt);
