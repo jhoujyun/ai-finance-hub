@@ -1,4 +1,4 @@
-// api/news.js - 帶快取和成本控制的新聞抓取 API (v6 增強版 - 支持 6 條新聞 & sk-*** 穩定版)
+// api/news.js - 帶快取和成本控制的新聞抓取 API (v6 增強版 - 支持 9 條新聞 & sk-*** 穩定版)
 
 let newsCache = null;
 let cacheTimestamp = null;
@@ -40,8 +40,8 @@ export default async function handler(req, res) {
 
     if (!NEWS_API_KEY) throw new Error('未設定 NEWS_API_KEY');
 
-    // 1. 從 NewsAPI 抓取新聞（抓取 6 篇）
-    const newsResponse = await fetch(`https://newsapi.org/v2/top-headlines?category=business&language=en&pageSize=6&apiKey=${NEWS_API_KEY}`);
+    // 1. 從 NewsAPI 抓取新聞（抓取 9 篇）
+    const newsResponse = await fetch(`https://newsapi.org/v2/top-headlines?category=business&language=en&pageSize=9&apiKey=${NEWS_API_KEY}`);
     if (!newsResponse.ok) throw new Error(`NewsAPI 錯誤: ${newsResponse.status}`);
     const newsData = await newsResponse.json();
     const articles = newsData.articles || [];
@@ -55,7 +55,7 @@ export default async function handler(req, res) {
     // 2. AI 處理 (標準 OpenAI 格式)
     let processedNews;
     if (OPENAI_API_KEY) {
-      const batchPrompt = articles.slice(0, 6).map((article, i) => 
+      const batchPrompt = articles.slice(0, 9).map((article, i) => 
         `新聞 ${i + 1}:\n標題: ${article.title}\n內容: ${article.description || article.content?.substring(0, 200) || ''}\n來源: ${article.source.name}`
       ).join('\n\n---\n\n');
 
@@ -127,7 +127,7 @@ function articlesAreSame(newArticles, cachedNews) {
 }
 
 function createFallbackNews(articles, errorMessage = '') {
-  return articles.slice(0, 6).map((article, index) => ({
+  return articles.slice(0, 9).map((article, index) => ({
     id: index + 1,
     title: article.title,
     source: article.source.name,
