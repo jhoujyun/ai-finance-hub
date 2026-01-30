@@ -1,4 +1,4 @@
-// api/news.js - 帶快取和成本控制的新聞抓取 API (v5 - 深度偽裝 & 繞過攔截版)
+// api/news.js - 帶快取和成本控制的新聞抓取 API (v6 - sk-*** 密鑰穩定版)
 
 let newsCache = null;
 let cacheTimestamp = null;
@@ -30,15 +30,13 @@ export default async function handler(req, res) {
     }
 
     const NEWS_API_KEY = process.env.NEWS_API_KEY;
-    // 兼容 cr-*** 密鑰，無論放在哪個變量都能讀取
-    const API_KEY = process.env.OPENAI_API_KEY || process.env.ANTHROPIC_API_KEY;
+    const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
     
-    // 處理 BASE_URL
     let BASE_URL = process.env.API_BASE_URL || 'https://api.openai.com/v1';
     if (BASE_URL.endsWith('/')) BASE_URL = BASE_URL.slice(0, -1);
     
-    // 自動補全 /v1 路徑（如果用戶沒填的話）
-    if (!BASE_URL.includes('/v1') && !BASE_URL.includes('anthropic.com')) {
+    // 自動補全 /v1
+    if (!BASE_URL.includes('/v1')) {
       BASE_URL += '/v1';
     }
 
@@ -58,29 +56,23 @@ export default async function handler(req, res) {
       return res.status(200).json({ success: true, news: newsCache, timestamp: new Date().toISOString(), fromCache: true });
     }
 
-    // 2. AI 處理 (採用 OpenAI 兼容路徑，這對中轉站最友好)
+    // 2. AI 處理 (標準 OpenAI 格式)
     let processedNews;
-    if (API_KEY) {
+    if (OPENAI_API_KEY) {
       const batchPrompt = articles.slice(0, 3).map((article, i) => 
         `新聞 ${i + 1}:\n標題: ${article.title}\n內容: ${article.description || article.content?.substring(0, 200) || ''}\n來源: ${article.source.name}`
       ).join('\n\n---\n\n');
 
       try {
         dailyRequestCount++;
-        
-        // 構建 OpenAI 兼容路徑
         const apiUrl = `${BASE_URL}/chat/completions`;
 
         const aiResponse = await fetch(apiUrl, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            'Authorization': `Bearer ${API_KEY}`,
-            // 深度偽裝 Header，繞過 Cloudflare 基礎攔截
-            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'application/json',
-            'Origin': 'https://vercel.com',
-            'Referer': 'https://vercel.com/'
+            'Authorization': `Bearer ${OPENAI_API_KEY}`,
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
           },
           body: JSON.stringify({
             model: MODEL,
@@ -94,9 +86,8 @@ export default async function handler(req, res) {
 
         if (!aiResponse.ok) {
           const errorDetail = await aiResponse.text();
-          // 如果返回 HTML，說明被 Cloudflare 攔截了
           if (errorDetail.includes('<!DOCTYPE html>')) {
-            throw new Error(`被 Cloudflare 攔截 (403)。建議：請檢查 API_BASE_URL 是否正確，或更換中轉站地址。`);
+            throw new Error(`被 Cloudflare 攔截。請更換中轉站地址或聯繫服務商。`);
           }
           throw new Error(`AI API 錯誤 (${aiResponse.status}): ${errorDetail.substring(0, 50)}`);
         }
@@ -122,7 +113,7 @@ export default async function handler(req, res) {
         processedNews = createFallbackNews(articles, error.message);
       }
     } else {
-      processedNews = createFallbackNews(articles, '缺少 API_KEY');
+      processedNews = createFallbackNews(articles, '缺少 OPENAI_API_KEY');
     }
 
     newsCache = processedNews;
@@ -155,7 +146,7 @@ function createFallbackNews(articles, errorMessage = '') {
 }
 
 function getDefaultNews() {
-  return [{ id: 1, title: "系統訊息", source: "系統", time: "現在", summary: "請檢查環境變量設定。", aiInsight: "💡 提示：若出現 403，請確認中轉站地址是否支持 Vercel 訪問。", category: "系統", url: "#" }];
+  return [{ id: 1, title: "系統訊息", source: "系統", time: "現在", summary: "請檢查環境變量設定。", aiInsight: "💡 提示：請確保 API_BASE_URL 正確。", category: "系統", url: "#" }];
 }
 
 function getRelativeTime(publishedAt) {
