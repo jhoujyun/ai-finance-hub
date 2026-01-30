@@ -1,0 +1,14 @@
+# AI 財經工具站 - Robots.txt
+
+User-agent: *
+Allow: /
+
+# 允許所有搜尋引擎爬取
+Allow: /api/news
+Allow: /api/calendar
+
+# Sitemap 位置
+Sitemap: https://f-url.com/sitemap.xml
+
+# 爬蟲友善設定
+Crawl-delay: 1
