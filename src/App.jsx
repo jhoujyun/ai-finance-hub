@@ -276,9 +276,6 @@ function App() {
               </div>
             ))}
 
-            <div className="bg-gray-100 rounded-xl p-8 text-center border-2 border-dashed border-gray-300">
-              <p className="text-gray-500">Google AdSense 廣告位</p>
-            </div>
           </div>
         )}
 
@@ -539,3 +536,4 @@ function App() {
 }
 
 export default App;
+
